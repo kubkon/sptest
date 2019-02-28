@@ -53,9 +53,12 @@ fn main() {
         );
 
         let javascript = "
-            function add(x, y) {
-                return x + y;
-            puts(add(1, 1));
+            var msg = \"20,00,50,04,7E,42,01,05,20,00,20,00,42,01,7D,10,00,7E,0B\";
+            var bytes = Uint8Array.from(msg.split(\",\"), function(byte) {
+                return parseInt(byte, 16);
+            });
+            puts(bytes);
+            var module = new WebAssembly.Module(bytes);
         ";
 
         rooted!(in(ctx) let mut rval = UndefinedValue());
@@ -146,20 +149,29 @@ unsafe extern "C" fn report_pending_exception(ctx: *mut JSContext, dispatch_even
 
     JS_ClearPendingException(ctx);
 
-    let error_info = if value.is_object() {
+    if value.is_object() {
         rooted!(in(ctx) let object = value.to_object());
-        ErrorInfo::from_native_error(ctx, object.handle()).unwrap_or_else(|| ErrorInfo {
-            message: format!("uncaught exception: unknown (can't convert to string)"),
-            filename: String::new(),
-            lineno: 0,
-            column: 0,
-        })
+        let error_info =
+            ErrorInfo::from_native_error(ctx, object.handle()).unwrap_or_else(|| ErrorInfo {
+                message: format!("uncaught exception: unknown (can't convert to string)"),
+                filename: String::new(),
+                lineno: 0,
+                column: 0,
+            });
+
+        eprintln!(
+            "Error at {}:{}:{} {}",
+            error_info.filename, error_info.lineno, error_info.column, error_info.message
+        );
+    } else if value.is_string() {
+        rooted!(in(ctx) let object = value.to_string());
+        let message = JS_EncodeStringToUTF8(ctx, object.handle().into());
+        let message = std::ffi::CStr::from_ptr(message);
+        eprintln!(
+            "Error: {}",
+            String::from_utf8_lossy(message.to_bytes()).into_owned()
+        );
     } else {
         panic!("Uncaught exception: failed to stringify primitive");
     };
-
-    eprintln!(
-        "Error at {}:{}:{} {}",
-        error_info.filename, error_info.lineno, error_info.column, error_info.message
-    );
 }
