@@ -6,17 +6,20 @@ use mozjs::jsapi::CallArgs;
 use mozjs::jsapi::CompartmentOptions;
 use mozjs::jsapi::JSAutoCompartment;
 use mozjs::jsapi::JSContext;
+use mozjs::jsapi::JS_ClearPendingException;
 use mozjs::jsapi::JS_DefineFunction;
 use mozjs::jsapi::JS_EncodeStringToUTF8;
+use mozjs::jsapi::JS_IsExceptionPending;
 use mozjs::jsapi::JS_NewGlobalObject;
 use mozjs::jsapi::OnNewGlobalHookOption;
 use mozjs::jsapi::Value;
-// use mozjs::jsapi::JS_ReportErrorASCII;
 use mozjs::jsval::UndefinedValue;
-use mozjs::rust::{JSEngine, Runtime, SIMPLE_GLOBAL_CLASS};
+use mozjs::rust::wrappers::{JS_ErrorFromException, JS_GetPendingException};
+use mozjs::rust::{HandleObject, JSEngine, Runtime, SIMPLE_GLOBAL_CLASS};
 
 use std::ffi::CStr;
 use std::ptr;
+use std::slice::from_raw_parts;
 use std::str;
 
 fn main() {
@@ -52,7 +55,6 @@ fn main() {
         let javascript = "
             function add(x, y) {
                 return x + y;
-            };
             puts(add(1, 1));
         ";
 
@@ -60,7 +62,9 @@ fn main() {
 
         runtime
             .evaluate_script(global, javascript, "test", 0, rval.handle_mut())
-            .unwrap_or_else(|err| panic!("Error evaluating script: {:?}", err));
+            .unwrap_or_else(|_| {
+                report_pending_exception(ctx, true);
+            });
     }
 }
 
@@ -77,4 +81,85 @@ unsafe extern "C" fn puts(ctx: *mut JSContext, argc: u32, vp: *mut Value) -> boo
 
     args.rval().set(UndefinedValue());
     true
+}
+
+/// A struct encapsulating information about a runtime script error.
+pub struct ErrorInfo {
+    /// The error message.
+    pub message: String,
+    /// The file name.
+    pub filename: String,
+    /// The line number.
+    pub lineno: libc::c_uint,
+    /// The column number.
+    pub column: libc::c_uint,
+}
+
+impl ErrorInfo {
+    unsafe fn from_native_error(cx: *mut JSContext, object: HandleObject) -> Option<ErrorInfo> {
+        let report = JS_ErrorFromException(cx, object);
+        if report.is_null() {
+            return None;
+        }
+
+        let filename = {
+            let filename = (*report)._base.filename as *const u8;
+            if !filename.is_null() {
+                let length = (0..).find(|idx| *filename.offset(*idx) == 0).unwrap();
+                let filename = from_raw_parts(filename, length as usize);
+                String::from_utf8_lossy(filename).into_owned()
+            } else {
+                "none".to_string()
+            }
+        };
+
+        let lineno = (*report)._base.lineno;
+        let column = (*report)._base.column;
+
+        let message = {
+            let message = (*report)._base.message_.data_ as *const u8;
+            let length = (0..).find(|idx| *message.offset(*idx) == 0).unwrap();
+            let message = from_raw_parts(message, length as usize);
+            String::from_utf8_lossy(message).into_owned()
+        };
+
+        Some(ErrorInfo {
+            filename: filename,
+            message: message,
+            lineno: lineno,
+            column: column,
+        })
+    }
+}
+
+unsafe extern "C" fn report_pending_exception(ctx: *mut JSContext, dispatch_event: bool) {
+    if !JS_IsExceptionPending(ctx) {
+        return;
+    }
+
+    rooted!(in(ctx) let mut value = UndefinedValue());
+
+    if !JS_GetPendingException(ctx, value.handle_mut()) {
+        JS_ClearPendingException(ctx);
+        panic!("Uncaught exception: JS_GetPendingException failed");
+    }
+
+    JS_ClearPendingException(ctx);
+
+    let error_info = if value.is_object() {
+        rooted!(in(ctx) let object = value.to_object());
+        ErrorInfo::from_native_error(ctx, object.handle()).unwrap_or_else(|| ErrorInfo {
+            message: format!("uncaught exception: unknown (can't convert to string)"),
+            filename: String::new(),
+            lineno: 0,
+            column: 0,
+        })
+    } else {
+        panic!("Uncaught exception: failed to stringify primitive");
+    };
+
+    eprintln!(
+        "Error at {}:{}:{} {}",
+        error_info.filename, error_info.lineno, error_info.column, error_info.message
+    );
 }
