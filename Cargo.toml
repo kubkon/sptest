@@ -1,0 +1,9 @@
+[package]
+name = "sptest"
+version = "0.1.0"
+authors = ["Jakub Konka <jakub.konka@golem.network>"]
+edition = "2018"
+
+[dependencies]
+libc = "0.2"
+mozjs = "0.10"
