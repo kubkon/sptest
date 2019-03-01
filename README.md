@@ -25,7 +25,7 @@ $ cargo build --features "log-debug"
 
 ## Running
 The program requires you to specify WebAssembly cross-compiled using Emscripten compiler with filenames hardcoded
-to `main.js` for the glue code, and `main.wasm` for the actually Wasm binary. Make sure they are in the root of
+to `main.js` for the glue code, and `main.wasm` for the actually Wasm binary. **NB when building your Wasm binary, make sure you pass in BINARYEN_ASYNC_COMPILATION=0 flag to emcc compiler.** Make sure they are in the root of
 this project, and run:
 
 ```
