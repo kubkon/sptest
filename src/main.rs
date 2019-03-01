@@ -119,7 +119,7 @@ fn main() {
 
         rooted!(in(ctx) let mut rval = UndefinedValue());
         runtime
-            .evaluate_script(global, &javascript, "main.js", 0, rval.handle_mut())
+            .evaluate_script(global, &javascript, "noname", 0, rval.handle_mut())
             .unwrap_or_else(|_| {
                 report_pending_exception(ctx, true);
             });
