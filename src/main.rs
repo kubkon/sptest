@@ -6,6 +6,7 @@ use mozjs::jsapi::CallArgs;
 use mozjs::jsapi::CompartmentOptions;
 use mozjs::jsapi::JSAutoCompartment;
 use mozjs::jsapi::JSContext;
+use mozjs::jsapi::JSObject;
 use mozjs::jsapi::JS_ClearPendingException;
 use mozjs::jsapi::JS_DefineFunction;
 use mozjs::jsapi::JS_EncodeStringToUTF8;
@@ -13,11 +14,15 @@ use mozjs::jsapi::JS_IsExceptionPending;
 use mozjs::jsapi::JS_NewGlobalObject;
 use mozjs::jsapi::OnNewGlobalHookOption;
 use mozjs::jsapi::Value;
+use mozjs::jsval::ObjectValue;
 use mozjs::jsval::UndefinedValue;
 use mozjs::rust::wrappers::{JS_ErrorFromException, JS_GetPendingException};
 use mozjs::rust::{HandleObject, JSEngine, Runtime, SIMPLE_GLOBAL_CLASS};
+use mozjs::typedarray::{ArrayBuffer, CreateWith};
 
 use std::ffi::CStr;
+use std::fs::File;
+use std::io::prelude::*;
 use std::ptr;
 use std::slice::from_raw_parts;
 use std::str;
@@ -48,8 +53,24 @@ mod logger {
     }
 }
 
+fn read_js(filename: &str) -> std::io::Result<String> {
+    let mut file = File::open(filename)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
+}
+
+fn read_wasm(filename: &str) -> std::io::Result<Vec<u8>> {
+    let mut file = File::open(filename)?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    Ok(contents)
+}
+
 fn main() {
     logger::init().unwrap();
+
+    let wasm_js = read_js("main.js").unwrap();
 
     let engine =
         JSEngine::init().unwrap_or_else(|err| panic!("Error initializing JSEngine: {:?}", err));
@@ -79,24 +100,49 @@ fn main() {
             0,
             0,
         );
+        let _readWasm_fn = JS_DefineFunction(
+            ctx,
+            global.into(),
+            b"readWasm\0".as_ptr() as *const libc::c_char,
+            Some(readWasm),
+            0,
+            0,
+        );
 
-        let javascript = "
-            var msg = \"20,00,50,04,7E,42,01,05,20,00,20,00,42,01,7D,10,00,7E,0B\";
-            var bytes = Uint8Array.from(msg.split(\",\"), function(byte) {
-                return parseInt(byte, 16);
-            });
-            puts(bytes);
-            var module = new WebAssembly.Module(bytes);
-        ";
+        // init print funcs
+        let javascript = String::from(
+            "
+            var Module = {'printErr': puts, 'print': puts};
+            Module['wasmBinary'] = readWasm('main.wasm');
+        ",
+        ) + &wasm_js;
 
         rooted!(in(ctx) let mut rval = UndefinedValue());
-
         runtime
-            .evaluate_script(global, javascript, "test", 0, rval.handle_mut())
+            .evaluate_script(global, &javascript, "main.js", 0, rval.handle_mut())
             .unwrap_or_else(|_| {
                 report_pending_exception(ctx, true);
             });
     }
+}
+
+unsafe extern "C" fn readWasm(ctx: *mut JSContext, argc: u32, vp: *mut Value) -> bool {
+    let args = CallArgs::from_vp(vp, argc);
+
+    let arg = mozjs::rust::Handle::from_raw(args.get(0));
+    let filename = mozjs::rust::ToString(ctx, arg);
+
+    rooted!(in(ctx) let filename_root = filename);
+    let filename = JS_EncodeStringToUTF8(ctx, filename_root.handle().into());
+    let filename = CStr::from_ptr(filename);
+
+    let contents = read_wasm(str::from_utf8(filename.to_bytes()).unwrap()).unwrap();
+
+    rooted!(in(ctx) let mut rval = ptr::null_mut::<JSObject>());
+    ArrayBuffer::create(ctx, CreateWith::Slice(&contents), rval.handle_mut()).unwrap();
+
+    args.rval().set(ObjectValue(rval.get()));
+    true
 }
 
 unsafe extern "C" fn puts(ctx: *mut JSContext, argc: u32, vp: *mut Value) -> bool {
