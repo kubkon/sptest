@@ -7,3 +7,7 @@ edition = "2018"
 [dependencies]
 libc = "0.2"
 mozjs = "0.10"
+log = "0.4"
+
+[features]
+log-debug = ["mozjs/debugmozjs", "log/max_level_debug"]
