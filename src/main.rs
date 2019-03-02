@@ -2,8 +2,11 @@
 extern crate mozjs;
 extern crate libc;
 
+use mozjs::glue::SetBuildId;
+use mozjs::jsapi::BuildIdCharVector;
 use mozjs::jsapi::CallArgs;
 use mozjs::jsapi::CompartmentOptions;
+use mozjs::jsapi::ContextOptionsRef;
 use mozjs::jsapi::JSAutoCompartment;
 use mozjs::jsapi::JSContext;
 use mozjs::jsapi::JSObject;
@@ -13,6 +16,7 @@ use mozjs::jsapi::JS_EncodeStringToUTF8;
 use mozjs::jsapi::JS_IsExceptionPending;
 use mozjs::jsapi::JS_NewGlobalObject;
 use mozjs::jsapi::OnNewGlobalHookOption;
+use mozjs::jsapi::SetBuildIdOp;
 use mozjs::jsapi::Value;
 use mozjs::jsval::ObjectValue;
 use mozjs::jsval::UndefinedValue;
@@ -80,6 +84,13 @@ fn main() {
     let c_option = CompartmentOptions::default();
 
     unsafe {
+        // runtime options
+        let ctx_opts = &mut *ContextOptionsRef(ctx);
+        ctx_opts.set_wasm_(true);
+        ctx_opts.set_wasmBaseline_(true);
+        ctx_opts.set_wasmIon_(true);
+        SetBuildIdOp(ctx, Some(sp_build_id));
+
         let global = JS_NewGlobalObject(
             ctx,
             &SIMPLE_GLOBAL_CLASS,
@@ -124,6 +135,11 @@ fn main() {
                 report_pending_exception(ctx, true);
             });
     }
+}
+
+unsafe extern "C" fn sp_build_id(build_id: *mut BuildIdCharVector) -> bool {
+    let sp_id = b"SP\0";
+    SetBuildId(build_id, &sp_id[0], sp_id.len())
 }
 
 unsafe extern "C" fn readWasm(ctx: *mut JSContext, argc: u32, vp: *mut Value) -> bool {
